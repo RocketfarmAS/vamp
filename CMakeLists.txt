@@ -1,210 +1,88 @@
-cmake_minimum_required(VERSION 3.16...3.22)
+cmake_minimum_required(VERSION 3.16)
+project(vamp)
 
-option(VAMP_LTO "Use LTO." ON)
-option(VAMP_FORCE_COLORED_OUTPUT "Always produce ANSI-colored output." ON)
-option(VAMP_FORCE_CLANG "Force the use of Clang." OFF)
+# ──────────────────────────────────────────────────────────────────────────────
+# ROS 2 (ament) packaging of VAMP for the Sentinel stack — the `ros2` branch.
+# This CMakeLists REPLACES upstream's (which drives the CPM/nanobind python
+# build); see ROS2_PACKAGE.md for the branch contract. Consumers link the
+# exported `vamp::vamp` interface target and get the headers, the pinned
+# transitive deps (nigh, pdqsort, simdxorshift), the compiled simdxorshift
+# static library, and the SIMD baseline flags.
+# ──────────────────────────────────────────────────────────────────────────────
 
-option(VAMP_BUILD_PYTHON_BINDINGS "Build VAMP Python bindings" ON)
-option(VAMP_INSTALL_CPP_LIBRARY "Install VAMP C++ library (disable for Python wheel builds)" ON)
+find_package(ament_cmake REQUIRED)
+find_package(Eigen3 REQUIRED)
 
-option(VAMP_BUILD_CPP_DEMO "Build VAMP C++ Demo Scripts" OFF)
-option(VAMP_BUILD_OMPL_DEMO "Build VAMP C++ OMPL Integration Demo Scripts" OFF)
-option(VAMP_OMPL_PATH "Search Path for OMPL Installation - Only Needed for Demo Script" "")
-option(VAMP_BUILD_WASM "Build VAMP WebAssembly module" OFF)
-option(VAMP_BUILD_TESTS "Build VAMP C++ unit tests (Catch2)" OFF)
+# x86-64 SIMD baseline for vamp's AVX kernels. Fixed (NOT -march=native) so the
+# baseline is identical across dev machines and CI. Exported as INTERFACE compile
+# options: vamp's kernels compile in the consuming TU, so the consumer must build
+# with the same baseline (this mirrors the previous in-tree vendoring exactly).
+set(VAMP_SIMD_FLAGS -O3 -mavx2 -mfma)
 
-if(VAMP_FORCE_CLANG)
-  find_program(CLANG "clang")
-  find_program(CLANGPP "clang++")
+# simdxorshift: the only dep with compiled sources (AVX2 xorshift128+ RNG backing
+# vamp/random/xorshift.hh). -w silences vendored C warnings.
+add_library(vamp_simdxorshift STATIC
+  external/simdxorshift/src/simdxorshift128plus.c
+  external/simdxorshift/src/xorshift128plus.c
+)
+set_target_properties(vamp_simdxorshift PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vamp_simdxorshift SYSTEM PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/simdxorshift/include>"
+  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}_external>"
+)
+target_compile_options(vamp_simdxorshift PRIVATE ${VAMP_SIMD_FLAGS} -w)
 
-  set(CMAKE_C_COMPILER ${CLANG} CACHE STRING "C compiler" FORCE)
-  set(CMAKE_CXX_COMPILER ${CLANGPP} CACHE STRING "C++ compiler" FORCE)
-endif()
+# vamp core is header-only -> INTERFACE. Headers are SYSTEM so consumer linters
+# and -Wall/-Wextra never fire on this external code. All include roots collapse
+# into one installed dir so the include forms are identical to upstream usage:
+#   #include <vamp/...>  #include <nigh/...>  #include <pdqsort.h>
+#   #include <simdxorshift128plus.h>
+add_library(vamp INTERFACE)
+target_include_directories(vamp SYSTEM INTERFACE
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/impl>"
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/nigh/include>"
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/pdqsort>"
+  "$<INSTALL_INTERFACE:include/${PROJECT_NAME}_external>"
+)
+target_compile_features(vamp INTERFACE cxx_std_17)
+target_compile_options(vamp INTERFACE ${VAMP_SIMD_FLAGS})
+target_link_libraries(vamp INTERFACE Eigen3::Eigen vamp_simdxorshift)
 
-if(VAMP_FORCE_COLORED_OUTPUT)
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    add_compile_options(-fdiagnostics-color=always)
-  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(-fcolor-diagnostics)
-  endif()
-endif()
-
-project(
-    vamp
-    VERSION 0.2
-    LANGUAGES C CXX
+# One install root (include/vamp_external) holding every header tree, preserving
+# the upstream include forms above. The vamp/ headers live under it too.
+install(DIRECTORY src/impl/vamp
+  DESTINATION include/${PROJECT_NAME}_external
+  FILES_MATCHING PATTERN "*.hh" PATTERN "*.h" PATTERN "*.hpp"
+  PATTERN "bindings" EXCLUDE
+)
+install(DIRECTORY external/nigh/include/nigh
+  DESTINATION include/${PROJECT_NAME}_external
+)
+install(FILES external/pdqsort/pdqsort.h
+  DESTINATION include/${PROJECT_NAME}_external
+)
+install(DIRECTORY external/simdxorshift/include/
+  DESTINATION include/${PROJECT_NAME}_external
+)
+install(FILES LICENSE.txt DESTINATION share/${PROJECT_NAME})
+install(FILES external/nigh/LICENSE
+  DESTINATION share/${PROJECT_NAME}/licenses/nigh
+)
+install(FILES external/pdqsort/license.txt
+  DESTINATION share/${PROJECT_NAME}/licenses/pdqsort
+)
+install(FILES external/simdxorshift/LICENSE
+  DESTINATION share/${PROJECT_NAME}/licenses/simdxorshift
 )
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
-
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
-endif()
-
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-include(macros)
-include(GNUInstallDirs)
-include(CMakePackageConfigHelpers)
-include(CompilerSettings)
-include(FetchInitCPM)
-include(Dependencies)
-
-# Create VAMP C++ library
-add_library(vamp_cpp INTERFACE)
-
-# Set required C++ standard for the library
-target_compile_features(vamp_cpp INTERFACE cxx_std_17)
-
-target_include_directories(vamp_cpp
-    INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/impl>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/vamp>
+install(TARGETS vamp vamp_simdxorshift
+  EXPORT export_vamp
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
 )
 
-target_link_libraries_system(vamp_cpp
-    INTERFACE
-    Eigen3::Eigen
-    nigh
-    pdqsort
-)
+ament_export_targets(export_vamp HAS_LIBRARY_TARGET)
+ament_export_dependencies(Eigen3)
 
-# Link SIMDxorshift if available
-if(TARGET simdxorshift)
-  target_link_libraries(vamp_cpp INTERFACE simdxorshift)
-endif()
-
-# Set library properties
-set_target_properties(vamp_cpp PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-)
-
-# Create alias target for modern CMake usage
-add_library(vamp::vamp ALIAS vamp_cpp)
-
-# Build Python bindings
-include(Python)
-
-# Install C++ library components (conditional for Python wheel builds)
-if(VAMP_INSTALL_CPP_LIBRARY)
-  # Install C++ library headers and SIMD library (if available)
-  set(VAMP_INSTALL_TARGETS vamp_cpp)
-  if(TARGET simdxorshift)
-    list(APPEND VAMP_INSTALL_TARGETS simdxorshift)
-  endif()
-
-  install(TARGETS ${VAMP_INSTALL_TARGETS}
-      EXPORT vamp_cppTargets
-      LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-  )
-
-  # Install headers
-  install(DIRECTORY src/impl/vamp/
-      DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vamp
-      FILES_MATCHING PATTERN "*.hh"
-  )
-
-  # Generate package configuration files
-  configure_package_config_file(
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vampConfig.cmake.in"
-      "${CMAKE_CURRENT_BINARY_DIR}/vampConfig.cmake"
-      INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake/vamp
-  )
-
-  write_basic_package_version_file(
-      "${CMAKE_CURRENT_BINARY_DIR}/vampConfigVersion.cmake"
-      VERSION ${PROJECT_VERSION}
-      COMPATIBILITY SameMajorVersion
-  )
-
-  # Install package configuration files
-  install(FILES
-      "${CMAKE_CURRENT_BINARY_DIR}/vampConfig.cmake"
-      "${CMAKE_CURRENT_BINARY_DIR}/vampConfigVersion.cmake"
-      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake/vamp
-  )
-
-  # Export targets
-  install(EXPORT vamp_cppTargets
-      FILE vamp_cppTargets.cmake
-      NAMESPACE vamp::
-      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake/vamp
-  )
-endif()
-
-# C++ demos
-if(VAMP_BUILD_CPP_DEMO)
-  add_executable(vamp_rrtc_example scripts/cpp/rrtc_example.cc)
-  target_link_libraries(vamp_rrtc_example PRIVATE vamp_cpp)
-  
-  # Disable strict warnings for demos to maintain compatibility
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(vamp_rrtc_example PRIVATE -Wno-c++11-narrowing -Wno-sign-compare)
-  endif()
-endif()
-
-# OMPL integration demo
-if(VAMP_BUILD_OMPL_DEMO)
-  find_package(ompl QUIET PATHS ${VAMP_OMPL_PATH})
-
-  if(ompl_FOUND)
-    add_executable(vamp_ompl_integration scripts/cpp/ompl_integration.cc)
-    target_link_libraries(vamp_ompl_integration PRIVATE ompl::ompl vamp_cpp)
-    
-    # Disable strict warnings for demos to maintain compatibility
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-      target_compile_options(vamp_ompl_integration PRIVATE -Wno-c++11-narrowing -Wno-sign-compare)
-    endif()
-  else()
-    message(WARNING "OMPL not found! Cannot build OMPL demo.")
-  endif()
-endif()
-
-# C++ unit tests
-if(VAMP_BUILD_TESTS)
-  enable_testing()
-  add_subdirectory(tests)
-endif()
-
-# WebAssembly build
-if(VAMP_BUILD_WASM)
-  include(EmscriptenBuild)
-
-  if(NOT VAMP_WASM_ROBOT_MODULES)
-    set(VAMP_WASM_ROBOT_MODULES panda fetch ur5)
-    set(VAMP_WASM_ROBOT_STRUCTS Panda Fetch UR5)
-  endif()
-
-  foreach(robot_name ROBOT_STRUCT IN ZIP_LISTS VAMP_WASM_ROBOT_MODULES VAMP_WASM_ROBOT_STRUCTS)
-    configure_file(
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/impl/vamp/bindings/wasm/bindings.cc.in
-      ${CMAKE_CURRENT_BINARY_DIR}/wasm/${robot_name}_wasm_bindings.cc
-      @ONLY
-    )
-
-    vamp_create_wasm_module(${robot_name}_wasm
-      ${CMAKE_CURRENT_BINARY_DIR}/wasm/${robot_name}_wasm_bindings.cc
-    )
-
-    target_include_directories(${robot_name}_wasm PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/impl
-    )
-  endforeach()
-endif()
-
-# Print build configuration
-message(STATUS "VAMP build configuration:")
-message(STATUS "  - C++ library: ON")
-message(STATUS "  - Install C++ library: ${VAMP_INSTALL_CPP_LIBRARY}")
-message(STATUS "  - Python bindings: ${VAMP_BUILD_PYTHON_BINDINGS}")
-message(STATUS "  - C++ demos: ${VAMP_BUILD_CPP_DEMO}")
-message(STATUS "  - OMPL demos: ${VAMP_BUILD_OMPL_DEMO}")
-message(STATUS "  - WASM module: ${VAMP_BUILD_WASM}")
-message(STATUS "  - C++ unit tests: ${VAMP_BUILD_TESTS}")
+ament_package()

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>vamp</name>
+  <version>1.0.0</version>
+  <description>
+    VAMP (Vector-Accelerated Motion Planning) packaged as a ROS 2 ament_cmake
+    library for the Sentinel path-planning stack. Header-only SIMD planning +
+    collision checking, plus the vendored simdxorshift RNG as a static library.
+    This is the Rocketfarm `ros2` branch of the KavrakiLab/vamp fork — see
+    ROS2_PACKAGE.md for the branch contract and sync procedure.
+  </description>
+  <maintainer email="bent@rocketfarm.no">Bent Martin Dyrdal</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>eigen</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
