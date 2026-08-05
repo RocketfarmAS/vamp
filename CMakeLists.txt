@@ -46,6 +46,10 @@ target_include_directories(vamp SYSTEM INTERFACE
 )
 target_compile_features(vamp INTERFACE cxx_std_17)
 target_compile_options(vamp INTERFACE ${VAMP_SIMD_FLAGS})
+# Consumers compile vamp kernels into their own TUs, often inside static libs that
+# feed shared plugin libraries (vamp_sentinel_bridge) — force PIC downstream, as
+# the previous in-tree vendoring did.
+set_target_properties(vamp PROPERTIES INTERFACE_POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(vamp INTERFACE Eigen3::Eigen vamp_simdxorshift)
 
 # One install root (include/vamp_external) holding every header tree, preserving
