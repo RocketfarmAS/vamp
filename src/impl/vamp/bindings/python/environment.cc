@@ -225,6 +225,14 @@ void vamp::binding::init_environment(nanobind::module_ &pymodule)
             [](vc::Attachment<float> &a, std::vector<collision::Sphere<float>> &spheres)
             { a.spheres.insert(a.spheres.end(), spheres.cbegin(), spheres.cend()); })
         .def(
+            "add_cuboid",
+            [](vc::Attachment<float> &a, collision::Cuboid<float> &cuboid)
+            { a.cuboids.emplace_back(cuboid); })
+        .def(
+            "add_cuboids",
+            [](vc::Attachment<float> &a, std::vector<collision::Cuboid<float>> &cuboids)
+            { a.cuboids.insert(a.cuboids.end(), cuboids.cbegin(), cuboids.cend()); })
+        .def(
             "set_ee_pose",
             [](vc::Attachment<float> &a, Eigen::Matrix4f &tf)
             {
@@ -233,5 +241,6 @@ void vamp::binding::init_environment(nanobind::module_ &pymodule)
                 a.pose(iso);
             },
             "tf"_a)
-        .def_ro("posed_spheres", &vc::Attachment<float>::posed_spheres);
+        .def_ro("posed_spheres", &vc::Attachment<float>::posed_spheres)
+        .def_ro("posed_cuboids", &vc::Attachment<float>::posed_cuboids);
 }

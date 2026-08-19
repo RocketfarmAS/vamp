@@ -6,6 +6,8 @@
 #include <vamp/collision/sphere_capsule.hh>
 #include <vamp/collision/sphere_cuboid.hh>
 #include <vamp/collision/sphere_heightfield.hh>
+#include <vamp/collision/cuboid_cuboid.hh>
+#include <vamp/collision/cuboid_capsule.hh>
 #include <vamp/collision/math.hh>
 
 namespace vamp
@@ -248,6 +250,112 @@ namespace vamp
         return objects;
     }
 
+    // An attached box against the whole environment. The early breaks mirror the sphere
+    // path: the environment is sorted by each obstacle's distance to the world origin, so
+    // once that exceeds the reach of the box's circumscribed sphere nothing further can
+    // touch it.
+    template <typename DataT>
+    inline constexpr auto cuboid_environment_in_collision(
+        const collision::Environment<DataT> &e,  //
+        const collision::Cuboid<DataT> &c) noexcept -> bool
+    {
+        const auto circum_r = collision::sqrt(
+            collision::dot_3(c.axis_1_r, c.axis_2_r, c.axis_3_r, c.axis_1_r, c.axis_2_r, c.axis_3_r));
+        const auto max_extent = collision::sqrt(collision::dot_3(c.x, c.y, c.z, c.x, c.y, c.z)) + circum_r;
+
+        for (const auto &es : e.spheres)
+        {
+            const auto diff = es.min_distance - max_extent;
+            if (diff.test_zero())
+            {
+                break;
+            }
+
+            if (not collision::sphere_cuboid(c, es.x, es.y, es.z, es.r * es.r).test_zero())
+            {
+                return true;
+            }
+        }
+
+        for (const auto &ec : e.capsules)
+        {
+            const auto diff = ec.min_distance - max_extent;
+            if (diff.test_zero())
+            {
+                break;
+            }
+
+            if (not collision::cuboid_capsule(c, ec).test_zero())
+            {
+                return true;
+            }
+        }
+
+        for (const auto &ec : e.z_aligned_capsules)
+        {
+            const auto diff = ec.min_distance - max_extent;
+            if (diff.test_zero())
+            {
+                break;
+            }
+
+            if (not collision::cuboid_z_aligned_capsule(c, ec).test_zero())
+            {
+                return true;
+            }
+        }
+
+        for (const auto &ec : e.cuboids)
+        {
+            const auto diff = ec.min_distance - max_extent;
+            if (diff.test_zero())
+            {
+                break;
+            }
+
+            if (not collision::cuboid_cuboid(c, ec).test_zero())
+            {
+                return true;
+            }
+        }
+
+        for (const auto &ec : e.z_aligned_cuboids)
+        {
+            const auto diff = ec.min_distance - max_extent;
+            if (diff.test_zero())
+            {
+                break;
+            }
+
+            if (not collision::cuboid_z_aligned_cuboid(c, ec).test_zero())
+            {
+                return true;
+            }
+        }
+
+        // Heightfields and point clouds have no box test, so the box is stood in for by the
+        // sphere that contains it. Coarse, but these must not silently stop being checked
+        // the moment an attachment carries a box.
+        for (const auto &eh : e.heightfields)
+        {
+            if (not collision::sphere_heightfield(eh, c.x, c.y, c.z, circum_r).test_zero())
+            {
+                return true;
+            }
+        }
+
+        const std::array<DataT, 3> positions = {c.x, c.y, c.z};
+        for (const auto &pc : e.pointclouds)
+        {
+            if (pc.collides_simd(positions, circum_r))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     template <typename DataT>
     inline constexpr auto attachment_environment_collision(const collision::Environment<DataT> &e) noexcept
         -> bool
@@ -259,6 +367,14 @@ namespace vamp
             // TODO: Fix the sphere representation to allow to store float radii even with vector
             // centers
             if (sphere_environment_in_collision(e, s.x, s.y, s.z, s.r[{0, 0}]))
+            {
+                return true;
+            }
+        }
+
+        for (const auto &c : e.attachments->posed_cuboids)
+        {
+            if (cuboid_environment_in_collision(e, c))
             {
                 return true;
             }
@@ -284,6 +400,15 @@ namespace vamp
         {
             if (not collision::sphere_sphere_sql2(sx, sy, sz, sr, att_s.x, att_s.y, att_s.z, att_s.r)
                         .test_zero())
+            {
+                return true;
+            }
+        }
+
+        const auto rsq = sr * sr;
+        for (const auto &att_c : e.attachments->posed_cuboids)
+        {
+            if (not collision::sphere_cuboid(att_c, sx, sy, sz, rsq).test_zero())
             {
                 return true;
             }
